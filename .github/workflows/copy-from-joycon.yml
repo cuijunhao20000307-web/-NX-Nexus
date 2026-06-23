@@ -34,7 +34,7 @@ jobs:
             ! -path './.github/*' \
             -exec rm -rf {} + || true
           cp -a ../source/. .
-          rm -rf .git
+          rm -rf .github/workflows/copy-from-joycon.yml
           mkdir -p .github/workflows
 
       - name: Rename project to NX Nexus
@@ -74,4 +74,4 @@ jobs:
           git commit -m "Copy joycon-color base into NX Nexus" || echo "No changes to commit"
           git push
 
-# trigger fixed copy
+# trigger without deleting .git
