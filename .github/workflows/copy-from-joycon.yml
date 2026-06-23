@@ -57,3 +57,5 @@ jobs:
           git add -A
           git commit -m "Copy joycon-color base into NX Nexus" || echo "No changes to commit"
           git push
+
+# trigger recopy after joycon-color visibility change
