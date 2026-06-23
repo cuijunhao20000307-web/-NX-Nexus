@@ -1,0 +1,51 @@
+name: Copy from joycon-color
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          path: target
+
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: cuijunhao20000307-web/joycon-color
+          path: source
+
+      - name: Copy project files
+        run: |
+          shopt -s dotglob
+          cd target
+          find . -mindepth 1 \
+            ! -path './.git*' \
+            ! -path './.github' \
+            ! -path './.github/*' \
+            -exec rm -rf {} + || true
+          cp -a ../source/. .
+          rm -rf .git
+          mkdir -p .github/workflows
+          cp ../source/.github/workflows/* .github/workflows/ 2>/dev/null || true
+
+      - name: Rename project to NX Nexus
+        run: |
+          cd target
+          find . -type f \( -name 'Makefile' -o -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name '*.yaml' \) -print0 | \
+          xargs -0 sed -i 's/JOY-CON Color/NX Nexus/g; s/Joy-Con Color/NX Nexus/g; s/joycon-color/NX-Nexus/g; s/JOY-CON/NX-Nexus/g' || true
+
+      - name: Commit copied project
+        run: |
+          cd target
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Copy joycon-color base into NX Nexus" || echo "No changes to commit"
+          git push
