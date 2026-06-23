@@ -37,17 +37,33 @@ jobs:
           rm -rf .git
           mkdir -p .github/workflows
 
-      - name: Keep NX Nexus copy workflow
-        run: |
-          cd target
-          mkdir -p .github/workflows
-          cp ../target/.github/workflows/copy-from-joycon.yml .github/workflows/copy-from-joycon.yml
-
       - name: Rename project to NX Nexus
         run: |
           cd target
           find . -type f \( -name 'Makefile' -o -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.md' -o -name '*.json' -o -name '*.yml' -o -name '*.yaml' \) -print0 | \
           xargs -0 sed -i 's/JOY-CON Color/NX Nexus/g; s/Joy-Con Color/NX Nexus/g; s/joycon-color/NX-Nexus/g; s/JOY-CON/NX-Nexus/g' || true
+
+      - name: Restore copy workflow
+        run: |
+          cd target
+          mkdir -p .github/workflows
+          cat > .github/workflows/copy-from-joycon.yml <<'YAML'
+          name: Copy from joycon-color
+
+          on:
+            workflow_dispatch:
+
+          permissions:
+            contents: write
+
+          jobs:
+            copy:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Info
+                  run: echo "NX Nexus copied from joycon-color."
+          YAML
+          sed -i 's/^          //' .github/workflows/copy-from-joycon.yml
 
       - name: Commit copied project
         run: |
@@ -58,4 +74,4 @@ jobs:
           git commit -m "Copy joycon-color base into NX Nexus" || echo "No changes to commit"
           git push
 
-# trigger recopy after joycon-color visibility change
+# trigger fixed copy
