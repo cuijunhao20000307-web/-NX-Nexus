@@ -36,34 +36,12 @@ jobs:
           cp -a ../source/. .
           rm -rf .git
           mkdir -p .github/workflows
-          cp ../source/.github/workflows/* .github/workflows/ 2>/dev/null || true
-          cp ../source/.github/workflows/* .github/workflows/ 2>/dev/null || true
-          cat > .github/workflows/copy-from-joycon.yml <<'EOF'
-name: Copy from joycon-color
 
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  copy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout target repo
-        uses: actions/checkout@v4
-        with:
-          path: target
-      - name: Checkout source repo
-        uses: actions/checkout@v4
-        with:
-          repository: cuijunhao20000307-web/joycon-color
-          path: source
-      - name: Copy project files
+      - name: Keep NX Nexus copy workflow
         run: |
-          echo "Manual recopy workflow preserved."
-EOF
+          cd target
+          mkdir -p .github/workflows
+          cp ../target/.github/workflows/copy-from-joycon.yml .github/workflows/copy-from-joycon.yml
 
       - name: Rename project to NX Nexus
         run: |
