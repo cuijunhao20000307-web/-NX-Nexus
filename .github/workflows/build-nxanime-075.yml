@@ -1,0 +1,48 @@
+name: Build NXAnime 0.7.5 NRO
+
+on:
+  push:
+    branches:
+      - nxanime-build-075
+    paths:
+      - '.github/workflows/build-nxanime-075.yml'
+      - 'NXAnime-0.7.5-hotfix-current.tar.gz.b64'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:20260219
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore source bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build-src
+          base64 -d NXAnime-0.7.5-hotfix-current.tar.gz.b64 > /tmp/nxanime.tar.gz
+          tar -xzf /tmp/nxanime.tar.gz -C build-src
+          find build-src -maxdepth 2 -type f -print
+
+      - name: Build NRO
+        shell: bash
+        run: |
+          set -euxo pipefail
+          source /opt/devkitpro/switchvars.sh
+          cd build-src
+          make clean || true
+          make -j2
+          test -s NXAnime.nro
+          file NXAnime.nro || true
+          ls -lh NXAnime.nro
+
+      - name: Upload NRO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NXAnime-0.7.5-hotfix-nro
+          path: build-src/NXAnime.nro
+          if-no-files-found: error
+          retention-days: 7
