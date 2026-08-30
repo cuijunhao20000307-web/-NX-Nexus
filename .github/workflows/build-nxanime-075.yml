@@ -37,6 +37,8 @@ jobs:
           set -euxo pipefail
           source /opt/devkitpro/switchvars.sh
           cd build-src
+          sed -i 's/pkg-config --cflags/aarch64-none-elf-pkg-config --cflags/g; s/pkg-config --libs/aarch64-none-elf-pkg-config --libs/g' Makefile
+          aarch64-none-elf-pkg-config --cflags freetype2 libcurl libpng libwebp sdl2 libavformat libavcodec libavutil libswscale libswresample
           make clean || true
           make -j2
           test -s NXAnime.nro
