@@ -52,3 +52,4 @@ jobs:
           path: build-src/NXAnime.nro
           if-no-files-found: error
           retention-days: 7
+# base-refresh-2
