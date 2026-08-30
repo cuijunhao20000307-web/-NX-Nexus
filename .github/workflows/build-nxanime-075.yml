@@ -37,19 +37,13 @@ jobs:
           grep -n "curl_io_open_cb\|likely_hls\|SOCKS5 当前" build-src/nxanime_source/player.cpp
           grep -n "launcher_cycle_proxy\|X 仅用于编辑自定义" build-src/nxanime_source/main.cpp
 
-      - name: Install Switch dependencies
+      - name: Verify bundled Switch dependencies
         shell: bash
         run: |
           set -euxo pipefail
-          dkp-pacman -Syy --noconfirm
-          dkp-pacman -S --needed --noconfirm \
-            switch-freetype \
-            switch-curl \
-            switch-libpng \
-            switch-libwebp \
-            switch-sdl2 \
-            switch-ffmpeg \
-            switch-libjpeg-turbo
+          source /opt/devkitpro/switchvars.sh
+          aarch64-none-elf-pkg-config --exists freetype2 libcurl libpng libwebp sdl2 libavformat libavcodec libavutil libswscale libswresample
+          aarch64-none-elf-pkg-config --modversion libavformat
 
       - name: Build NRO
         shell: bash
