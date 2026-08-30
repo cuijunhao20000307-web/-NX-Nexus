@@ -1,0 +1,373 @@
+diff -ruN nxrepair/Makefile nxrepair_v3/Makefile
+--- nxrepair/Makefile	2026-08-31 00:00:00.000000000 +0000
++++ nxrepair_v3/Makefile	2026-08-30 21:36:51.407488509 +0000
+@@ -47,7 +47,7 @@
+                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
+                   -I$(CURDIR)/$(BUILD)
+ export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+-export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp
++export NROFLAGS += --icon=$(CURDIR)/icon.jpg --nacp=$(CURDIR)/$(TARGET).nacp
+ .PHONY: all clean $(BUILD)
+ all: $(BUILD)
+ $(BUILD):
+diff -ruN nxrepair/nxanime_source/main.cpp nxrepair_v3/nxanime_source/main.cpp
+--- nxrepair/nxanime_source/main.cpp	2026-08-31 00:00:00.000000000 +0000
++++ nxrepair_v3/nxanime_source/main.cpp	2026-08-30 21:36:51.407955651 +0000
+@@ -440,19 +440,11 @@
+ static bool launcher_custom_source(){
+     return provider_source_mode()==PROVIDER_SOURCE_CUSTOM;
+ }
+-static void launcher_force_builtin_direct(State& st){
+-    if(!launcher_custom_source())st.proxy.mode=PROXY_MODE_DIRECT;
+-}
+ static void launcher_cycle_source(State& st,int dir){
+     int mode=wrapi(provider_source_mode()+dir,3);std::string msg;
+-    provider_source_select(mode,msg);launcher_force_builtin_direct(st);st.connected=false;st.status=msg;
++    provider_source_select(mode,msg);st.connected=false;st.status=msg;
+ }
+ static void launcher_cycle_proxy(State& st,int dir){
+-    if(!launcher_custom_source()){
+-        st.proxy.mode=PROXY_MODE_DIRECT;
+-        st.status="内置播放源固定直连 · 无需代理设置";
+-        return;
+-    }
+     st.proxy.mode=(ProxyMode)wrapi((int)st.proxy.mode+dir,3);proxy_config_save(&st.proxy);
+     st.status=std::string("代理模式：")+proxy_mode_cn(st.proxy.mode);
+ }
+@@ -466,26 +458,17 @@
+     port=std::atoi(input.substr(split+1).c_str());return port>0&&port<=65535;
+ }
+ static void launcher_edit(State& st){
+-    if(!launcher_custom_source()){
+-        st.proxy.mode=PROXY_MODE_DIRECT;
+-        st.status="在线影视/在线动漫固定直连 · X 编辑仅对自定义源开放";
++    // X is intentionally reserved for the custom playback source.
++    // Direct/HTTP/SOCKS5 remain selectable with Left/Right or ZL/ZR, but X
++    // no longer opens a proxy editor on those choices.
++    if(st.launcher_row!=0 || !launcher_custom_source()){
++        st.status="X 仅用于编辑自定义播放源 · 代理类型用方向键或 ZL/ZR 切换";
+         return;
+     }
+-    if(st.launcher_row==0){
+-        std::string value=provider_custom_source();
+-        if(value.empty())value="https://";
+-        if(!keyboard("添加播放源","输入兼容 MacCMS API 的根地址",value,value)){st.status="已取消编辑播放源";return;}
+-        std::string msg;if(provider_source_set_custom(value,msg)){st.connected=false;}st.status=msg;return;
+-    }
+-    std::string value;
+-    if(st.proxy.host[0]&&st.proxy.port>0)value=std::string(st.proxy.host)+":"+std::to_string(st.proxy.port);
+-    else value="127.0.0.1:7890";
+-    if(!keyboard("代理服务器","输入 host:port，例如 192.168.1.2:7890",value,value)){st.status="已取消编辑代理";return;}
+-    std::string host;int port=0;
+-    if(!parse_proxy_address(value,host,port)){st.status="代理地址格式错误 · 请使用 host:port";return;}
+-    std::snprintf(st.proxy.host,sizeof(st.proxy.host),"%s",host.c_str());st.proxy.port=port;
+-    if(st.proxy.mode==PROXY_MODE_DIRECT)st.proxy.mode=PROXY_MODE_HTTP;
+-    proxy_config_save(&st.proxy);st.status="代理服务器已保存 · "+host+":"+std::to_string(port);
++    std::string value=provider_custom_source();
++    if(value.empty())value="https://";
++    if(!keyboard("添加播放源","输入兼容 MacCMS API 的根地址",value,value)){st.status="已取消编辑播放源";return;}
++    std::string msg;if(provider_source_set_custom(value,msg)){st.connected=false;}st.status=msg;
+ }
+ 
+ static void draw_safe(u32* b,u32 s,const State& st){
+diff -ruN nxrepair/nxanime_source/player.cpp nxrepair_v3/nxanime_source/player.cpp
+--- nxrepair/nxanime_source/player.cpp	2026-08-31 00:00:00.000000000 +0000
++++ nxrepair_v3/nxanime_source/player.cpp	2026-08-30 21:37:58.041836463 +0000
+@@ -21,6 +21,7 @@
+ #include <cstring>
+ #include <deque>
+ #include <limits>
++#include <new>
+ #include <string>
+ #include <vector>
+ 
+@@ -357,6 +358,151 @@
+     return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+ }
+ 
++// The Switch FFmpeg port occasionally returns AVERROR(EINVAL) before it can
++// even read an HTTPS HLS playlist.  libcurl is already used successfully by
++// the provider layer, so HLS gets a second transport path: curl downloads the
++// current playlist/segment, while libavformat still performs all demuxing and
++// decoding.  AVFormatContext::io_open makes the same curl path available to
++// nested HLS playlists, keys and media segments.
++struct CurlMemoryIO {
++    std::vector<unsigned char> data;
++    size_t pos = 0;
++};
++
++struct CurlIOBridge {
++    ProxyConfig proxy{};
++    VideoRequestContext request;
++    const std::atomic<bool>* cancel = nullptr;
++};
++
++static size_t curl_memory_write(void* ptr, size_t size, size_t nmemb, void* userdata) {
++    if (!ptr || !userdata) return 0;
++    auto* out = static_cast<std::vector<unsigned char>*>(userdata);
++    const size_t bytes = size * nmemb;
++    const auto* begin = static_cast<const unsigned char*>(ptr);
++    out->insert(out->end(), begin, begin + bytes);
++    return bytes;
++}
++
++static bool curl_memory_reset(void* userdata) {
++    auto* out = static_cast<std::vector<unsigned char>*>(userdata);
++    if (!out) return false;
++    out->clear();
++    return true;
++}
++
++static int curl_avio_read(void* opaque, uint8_t* buf, int buf_size) {
++    auto* io = static_cast<CurlMemoryIO*>(opaque);
++    if (!io || !buf || buf_size <= 0) return AVERROR(EINVAL);
++    if (io->pos >= io->data.size()) return AVERROR_EOF;
++    const size_t available = io->data.size() - io->pos;
++    const size_t take = std::min(available, (size_t)buf_size);
++    std::memcpy(buf, io->data.data() + io->pos, take);
++    io->pos += take;
++    return (int)take;
++}
++
++static int64_t curl_avio_seek(void* opaque, int64_t offset, int whence) {
++    auto* io = static_cast<CurlMemoryIO*>(opaque);
++    if (!io) return AVERROR(EINVAL);
++    if (whence == AVSEEK_SIZE) return (int64_t)io->data.size();
++    const int base_whence = whence & ~AVSEEK_FORCE;
++    int64_t base = 0;
++    if (base_whence == SEEK_SET) base = 0;
++    else if (base_whence == SEEK_CUR) base = (int64_t)io->pos;
++    else if (base_whence == SEEK_END) base = (int64_t)io->data.size();
++    else return AVERROR(EINVAL);
++    const int64_t next = base + offset;
++    if (next < 0 || next > (int64_t)io->data.size()) return AVERROR(EINVAL);
++    io->pos = (size_t)next;
++    return next;
++}
++
++static AVIOContext* make_curl_memory_avio(std::vector<unsigned char>&& data) {
++    auto* state = new (std::nothrow) CurlMemoryIO();
++    if (!state) return nullptr;
++    state->data = std::move(data);
++    constexpr int kAvioBufferSize = 64 * 1024;
++    auto* buffer = static_cast<unsigned char*>(av_malloc(kAvioBufferSize));
++    if (!buffer) { delete state; return nullptr; }
++    AVIOContext* pb = avio_alloc_context(buffer, kAvioBufferSize, 0, state,
++                                         curl_avio_read, nullptr, curl_avio_seek);
++    if (!pb) { av_free(buffer); delete state; return nullptr; }
++    pb->seekable = AVIO_SEEKABLE_NORMAL;
++    return pb;
++}
++
++static void free_curl_memory_avio(AVIOContext* pb) {
++    if (!pb) return;
++    auto* state = static_cast<CurlMemoryIO*>(pb->opaque);
++    pb->opaque = nullptr;
++    delete state;
++    avio_context_free(&pb);
++}
++
++static bool curl_fetch_media_resource(const CurlIOBridge& bridge,
++                                      const std::string& url,
++                                      VideoNetworkStage stage,
++                                      std::vector<unsigned char>& out,
++                                      std::string* effective_url,
++                                      std::string& error) {
++    out.clear();
++    CURL* curl = curl_easy_init();
++    if (!curl) { error = "curl 初始化失败"; return false; }
++    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
++    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_memory_write);
++    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
++    if (!bridge.request.referer.empty())
++        curl_easy_setopt(curl, CURLOPT_REFERER, bridge.request.referer.c_str());
++
++    struct curl_slist* extra_headers = nullptr;
++    if (!bridge.request.origin.empty())
++        extra_headers = curl_slist_append(extra_headers,
++            ("Origin: " + bridge.request.origin).c_str());
++    if (!bridge.request.cookie.empty())
++        extra_headers = curl_slist_append(extra_headers,
++            ("Cookie: " + bridge.request.cookie).c_str());
++    if (extra_headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, extra_headers);
++
++    NetworkOptions options;
++    options.connect_timeout_seconds = 12;
++    options.total_timeout_seconds = 45;
++    options.low_speed_limit = 512;
++    options.low_speed_seconds = 20;
++    options.max_redirects = 10;
++    options.max_attempts = 3;
++    options.allow_ipv4_fallback = bridge.proxy.mode == PROXY_MODE_DIRECT;
++    if (!bridge.request.user_agent.empty()) options.user_agent = bridge.request.user_agent;
++    network_apply_proxy(curl, bridge.proxy);
++    const NetworkResult result = network_perform_get(
++        curl, stage, curl_memory_reset, &out, options, bridge.cancel);
++    if (effective_url) *effective_url = result.effective_url;
++    if (!result.success()) error = result.error.empty() ? "curl 请求失败" : result.error;
++    if (extra_headers) curl_slist_free_all(extra_headers);
++    curl_easy_cleanup(curl);
++    return result.success() && !out.empty();
++}
++
++static int curl_io_open_cb(AVFormatContext* s, AVIOContext** pb,
++                           const char* url, int flags, AVDictionary**) {
++    if (!s || !pb || !url || (flags & AVIO_FLAG_WRITE)) return AVERROR(EINVAL);
++    auto* bridge = static_cast<CurlIOBridge*>(s->opaque);
++    if (!bridge) return AVERROR(EINVAL);
++    std::vector<unsigned char> body;
++    std::string effective, error;
++    VideoNetworkStage stage = std::strstr(url, ".m3u8")
++        ? VideoNetworkStage::MediaPlaylist : VideoNetworkStage::MediaSegment;
++    if (!curl_fetch_media_resource(*bridge, url, stage, body, &effective, error))
++        return AVERROR(EIO);
++    *pb = make_curl_memory_avio(std::move(body));
++    return *pb ? 0 : AVERROR(ENOMEM);
++}
++
++static int curl_io_close_cb(AVFormatContext*, AVIOContext* pb) {
++    free_curl_memory_avio(pb);
++    return 0;
++}
++
+ struct DemuxState {
+     AVFormatContext* fmt = nullptr;
+     int video_stream = -1;
+@@ -615,11 +761,6 @@
+         status = "播放器参数无效";
+         return PLAYER_ERROR;
+     }
+-    if (proxy.mode == PROXY_MODE_SOCKS5) {
+-        status = "原生播放器暂不支持 SOCKS5 代理，请改用直连或 HTTP 代理";
+-        return PLAYER_ERROR;
+-    }
+-
+     clear_framebuffer(framebuffer);
+     PlayerLoadingAnimation loading(framebuffer, loading_renderer);
+     loading.start();
+@@ -642,7 +783,14 @@
+     if (request.referer.empty()) request.referer = source.referer;
+     if (request.user_agent.empty())
+         request.user_agent = "Mozilla/5.0 (Nintendo Switch; NXAnime) AppleWebKit/537.36";
++    const bool online_video_smooth =
++        request.referer.find("yichengwlkj.com") != std::string::npos ||
++        request.referer.find("rrmj.plus") != std::string::npos;
+     const std::string media_url = sanitize_media_url(source.url);
++    std::string media_url_lower = media_url;
++    std::transform(media_url_lower.begin(), media_url_lower.end(), media_url_lower.begin(),
++                   [](unsigned char c){ return (char)std::tolower(c); });
++    const bool likely_hls = source.hls || media_url_lower.find(".m3u8") != std::string::npos;
+     if (!is_http_media_url(media_url)) {
+         loading.stop();
+         SDL_QuitSubSystem(SDL_INIT_AUDIO | SDL_INIT_TIMER);
+@@ -656,6 +804,10 @@
+     if (!request.origin.empty()) headers += "Origin: " + request.origin + "\r\n";
+     if (!request.cookie.empty()) headers += "Cookie: " + request.cookie + "\r\n";
+     const std::string hp = http_proxy_url(proxy);
++    CurlIOBridge curl_bridge;
++    curl_bridge.proxy = proxy;
++    curl_bridge.request = request;
++    curl_bridge.cancel = &io_abort;
+ 
+     auto make_open_options = [&](bool compatibility_retry) {
+         AVDictionary* opts = nullptr;
+@@ -681,6 +833,12 @@
+         if (!ctx) return nullptr;
+         ctx->interrupt_callback.callback = io_interrupt_cb;
+         ctx->interrupt_callback.opaque = &io_interrupt;
++        // HLS subresources are always opened through libcurl. This bypasses
++        // the Switch FFmpeg HTTPS/redirect edge cases and also gives SOCKS5
++        // the same behavior as the provider/API layer.
++        ctx->opaque = &curl_bridge;
++        ctx->io_open = curl_io_open_cb;
++        ctx->io_close2 = curl_io_close_cb;
+         ctx->probesize = 256 * 1024;
+         ctx->max_analyze_duration = 500000;
+         ctx->max_probe_packets = 64;
+@@ -697,28 +855,68 @@
+         return PLAYER_ERROR;
+     }
+ 
+-    AVDictionary* opts = make_open_options(false);
+-    io_deadline_ns.store(now_ns() + 30'000'000'000ULL, std::memory_order_relaxed);
+-    int rc = avformat_open_input(&fmt, media_url.c_str(), nullptr, &opts);
+-    io_deadline_ns.store(0, std::memory_order_relaxed);
+-    av_dict_free(&opts);
+-
+-    // Compatibility fallback: retry once with only the universally supported
+-    // HTTP options. This specifically avoids the "Invalid argument" regression
+-    // seen when a port's protocol option table differs from desktop FFmpeg.
+-    if (rc < 0) {
++    // Initial open: FFmpeg is fastest for direct/HTTP-proxy playback.  For a
++    // SOCKS5 HLS request we deliberately skip it because libavformat's native
++    // HTTP proxy path cannot carry SOCKS5; curl handles it below.
++    int rc = AVERROR(EINVAL);
++    if (proxy.mode != PROXY_MODE_SOCKS5) {
++        AVDictionary* opts = make_open_options(false);
++        io_deadline_ns.store(now_ns() + 30'000'000'000ULL, std::memory_order_relaxed);
++        rc = avformat_open_input(&fmt, media_url.c_str(), nullptr, &opts);
++        io_deadline_ns.store(0, std::memory_order_relaxed);
++        av_dict_free(&opts);
++
++        if (rc < 0) {
++            if (fmt) avformat_close_input(&fmt);
++            fmt = make_format_context();
++            if (fmt) {
++                opts = make_open_options(true);
++                io_deadline_ns.store(now_ns() + 30'000'000'000ULL, std::memory_order_relaxed);
++                rc = avformat_open_input(&fmt, media_url.c_str(), nullptr, &opts);
++                io_deadline_ns.store(0, std::memory_order_relaxed);
++                av_dict_free(&opts);
++            }
++        }
++    }
++
++    // Reliable HLS fallback: fetch the initial playlist with libcurl, then
++    // give FFmpeg a memory AVIO. Nested playlists/keys/segments are fetched by
++    // curl_io_open_cb above, so this path supports Direct, HTTP and SOCKS5.
++    struct InitialCurlAvioGuard {
++        AVIOContext* pb = nullptr;
++        ~InitialCurlAvioGuard() { if (pb) free_curl_memory_avio(pb); }
++    } curl_initial;
++    if (rc < 0 && likely_hls) {
+         if (fmt) avformat_close_input(&fmt);
+-        fmt = make_format_context();
+-        if (fmt) {
+-            opts = make_open_options(true);
+-            io_deadline_ns.store(now_ns() + 30'000'000'000ULL, std::memory_order_relaxed);
+-            int retry_rc = avformat_open_input(&fmt, media_url.c_str(), nullptr, &opts);
+-            io_deadline_ns.store(0, std::memory_order_relaxed);
+-            av_dict_free(&opts);
+-            rc = retry_rc;
++        fmt = nullptr;
++        std::vector<unsigned char> playlist;
++        std::string effective_url, curl_error;
++        if (curl_fetch_media_resource(curl_bridge, media_url,
++                                      VideoNetworkStage::MasterPlaylist,
++                                      playlist, &effective_url, curl_error)) {
++            fmt = make_format_context();
++            curl_initial.pb = make_curl_memory_avio(std::move(playlist));
++            if (fmt && curl_initial.pb) {
++                fmt->pb = curl_initial.pb;
++                fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
++                const std::string open_name = effective_url.empty() ? media_url : effective_url;
++                const AVInputFormat* hls_input = av_find_input_format("hls");
++                io_deadline_ns.store(now_ns() + 30'000'000'000ULL, std::memory_order_relaxed);
++                rc = avformat_open_input(&fmt, open_name.c_str(), hls_input, nullptr);
++                io_deadline_ns.store(0, std::memory_order_relaxed);
++            } else {
++                rc = AVERROR(ENOMEM);
++            }
++        } else {
++            status = "HLS 网络请求失败：" + curl_error;
++            rc = AVERROR(EIO);
+         }
+     }
+ 
++    if (rc < 0 && proxy.mode == PROXY_MODE_SOCKS5 && !likely_hls) {
++        status = "SOCKS5 当前仅支持 HLS(m3u8) 播放源";
++    }
++
+     if (rc < 0) {
+         network_log_player_error(source.hls ? VideoNetworkStage::MasterPlaylist
+                                             : VideoNetworkStage::PlayUrl,
