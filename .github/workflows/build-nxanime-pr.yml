@@ -1,0 +1,49 @@
+name: Build NXAnime PR NRO
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:20260219
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Restore source bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat nxanime_chunks/part{00..11}.txt nxanime_chunks/part12a.txt nxanime_chunks/part12b.txt | tr -d '\r\n' > /tmp/nxanime.b64
+          test "$(wc -c < /tmp/nxanime.b64)" -eq 128960
+          echo "fcaa7c06a3170f7df0efc6449b4cde1e797d9da4dfdf9354d3b98b6088229cb9  /tmp/nxanime.b64" | sha256sum -c -
+          base64 -d /tmp/nxanime.b64 > /tmp/nxanime.tar.gz
+          gzip -t /tmp/nxanime.tar.gz
+          mkdir -p build-src
+          tar -xzf /tmp/nxanime.tar.gz -C build-src
+
+      - name: Build NRO
+        shell: bash
+        run: |
+          set -euxo pipefail
+          source /opt/devkitpro/switchvars.sh
+          cd build-src
+          sed -i 's/pkg-config --cflags/aarch64-none-elf-pkg-config --cflags/g; s/pkg-config --libs/aarch64-none-elf-pkg-config --libs/g' Makefile
+          aarch64-none-elf-pkg-config --cflags freetype2 libcurl libpng libwebp sdl2 libavformat libavcodec libavutil libswscale libswresample
+          make clean || true
+          make -j2
+          test -s NXAnime.nro
+          ls -lh NXAnime.nro
+
+      - name: Upload NRO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NXAnime-0.7.5-hotfix-nro
+          path: build-src/NXAnime.nro
+          if-no-files-found: error
+          retention-days: 7
