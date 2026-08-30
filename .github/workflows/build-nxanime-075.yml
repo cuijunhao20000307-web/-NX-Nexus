@@ -22,11 +22,11 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cat nxanime_chunks/part*.txt | tr -d '\r\n' > /tmp/nxanime.b64
+          cat nxanime_chunks/part{00..11}.txt nxanime_chunks/part12a.txt nxanime_chunks/part12b.txt | tr -d '\r\n' > /tmp/nxanime.b64
           test "$(wc -c < /tmp/nxanime.b64)" -eq 128960
           echo "fcaa7c06a3170f7df0efc6449b4cde1e797d9da4dfdf9354d3b98b6088229cb9  /tmp/nxanime.b64" | sha256sum -c -
           base64 -d /tmp/nxanime.b64 > /tmp/nxanime.tar.gz
-          tar -tzf /tmp/nxanime.tar.gz
+          gzip -t /tmp/nxanime.tar.gz
           mkdir -p build-src
           tar -xzf /tmp/nxanime.tar.gz -C build-src
           find build-src -maxdepth 2 -type f -print
