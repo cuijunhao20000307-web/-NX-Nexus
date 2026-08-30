@@ -32,10 +32,12 @@ jobs:
           mkdir -p build-src
           tar -xzf /tmp/nxanime.tar.gz -C build-src
           patch -p1 -d build-src < nxanime_fixes/repair-v3.patch
+          sed -i 's/;launcher_force_builtin_direct(st);/;/' build-src/nxanime_source/main.cpp
           touch build-src/Makefile build-src/icon.jpg build-src/nxanime_source/*
           grep -n "NROFLAGS" build-src/Makefile
           grep -n "curl_io_open_cb\|likely_hls\|SOCKS5 当前" build-src/nxanime_source/player.cpp
           grep -n "launcher_cycle_proxy\|X 仅用于编辑自定义" build-src/nxanime_source/main.cpp
+          if grep -q "launcher_force_builtin_direct" build-src/nxanime_source/main.cpp; then exit 1; fi
 
       - name: Verify bundled Switch dependencies
         shell: bash
