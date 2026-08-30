@@ -29,6 +29,19 @@ jobs:
           gzip -t /tmp/nxanime.tar.gz
           mkdir -p build-src
           tar -xzf /tmp/nxanime.tar.gz -C build-src
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build-src/nxanime_source/player.cpp')
+          s = p.read_text()
+          if 'const bool online_video_smooth' not in s:
+              needle = '    const std::string media_url = sanitize_media_url(source.url);'
+              insert = '''    // RRTV/online-video streams use the larger timestamp-aware buffer.\n    // Girigiri/anime keeps its established lower-latency demux behavior.\n    const bool online_video_smooth =\n        request.referer.find("yichengwlkj.com") != std::string::npos ||\n        request.referer.find("rrmj.plus") != std::string::npos;\n'''
+              if needle not in s:
+                  raise SystemExit('media_url insertion point not found')
+              s = s.replace(needle, insert + needle, 1)
+              p.write_text(s)
+          PY
+          touch build-src/Makefile build-src/icon.jpg build-src/nxanime_source/*
           find build-src -maxdepth 2 -type f -print
 
       - name: Install Switch dependencies
