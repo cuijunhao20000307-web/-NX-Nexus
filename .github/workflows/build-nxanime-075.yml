@@ -33,13 +33,27 @@ jobs:
           from pathlib import Path
           p = Path('build-src/nxanime_source/player.cpp')
           s = p.read_text()
+
           if 'const bool online_video_smooth' not in s:
               needle = '    const std::string media_url = sanitize_media_url(source.url);'
               insert = '''    // RRTV/online-video streams use the larger timestamp-aware buffer.\n    // Girigiri/anime keeps its established lower-latency demux behavior.\n    const bool online_video_smooth =\n        request.referer.find("yichengwlkj.com") != std::string::npos ||\n        request.referer.find("rrmj.plus") != std::string::npos;\n'''
               if needle not in s:
                   raise SystemExit('media_url insertion point not found')
               s = s.replace(needle, insert + needle, 1)
-              p.write_text(s)
+
+          # A few providers return URLs containing literal spaces after JSON/AES
+          # decoding. FFmpeg's Switch HTTP protocol rejects those with EINVAL.
+          sanitize_needle = '    replace_all("&amp;", "&");\n    return url;'
+          sanitize_repl = '''    replace_all("&amp;", "&");\n    replace_all("\\\\u003d", "=");\n    replace_all("\\\\u003f", "?");\n    replace_all("\\\\u002f", "/");\n    replace_all(" ", "%20");\n    return url;'''
+          if sanitize_needle in s:
+              s = s.replace(sanitize_needle, sanitize_repl, 1)
+
+          old = '''    // Compatibility fallback: retry once with only the universally supported\n    // HTTP options. This specifically avoids the "Invalid argument" regression\n    // seen when a port's protocol option table differs from desktop FFmpeg.\n    if (rc < 0) {\n        if (fmt) avformat_close_input(&fmt);\n        fmt = make_format_context();\n        if (fmt) {\n            opts = make_open_options(true);\n            io_deadline_ns.store(now_ns() + 30'000'000'000ULL, std::memory_order_relaxed);\n            int retry_rc = avformat_open_input(&fmt, media_url.c_str(), nullptr, &opts);\n            io_deadline_ns.store(0, std::memory_order_relaxed);\n            av_dict_free(&opts);\n            rc = retry_rc;\n        }\n    }\n'''
+          new = '''    // Compatibility fallback #1: retry with the reduced option set.\n    // Some Switch FFmpeg builds reject desktop-only protocol options with EINVAL.\n    if (rc < 0) {\n        if (fmt) avformat_close_input(&fmt);\n        fmt = make_format_context();\n        if (fmt) {\n            opts = make_open_options(true);\n            io_deadline_ns.store(now_ns() + 30'000'000'000ULL, std::memory_order_relaxed);\n            int retry_rc = avformat_open_input(&fmt, media_url.c_str(), nullptr, &opts);\n            io_deadline_ns.store(0, std::memory_order_relaxed);\n            av_dict_free(&opts);\n            rc = retry_rc;\n        }\n    }\n\n    // Compatibility fallback #2: let FFmpeg allocate its own AVFormatContext and\n    // pass absolutely no dictionary options. This avoids EINVAL caused either by\n    // a preconfigured context field or by a protocol option unsupported in the\n    // devkitPro Switch FFmpeg port. After a successful open we restore the runtime\n    // interrupt/probe settings used by NXAnime.\n    if (rc < 0) {\n        if (fmt) avformat_close_input(&fmt);\n        fmt = nullptr;\n        io_deadline_ns.store(0, std::memory_order_relaxed);\n        int bare_rc = avformat_open_input(&fmt, media_url.c_str(), nullptr, nullptr);\n        rc = bare_rc;\n        if (rc >= 0 && fmt) {\n            fmt->interrupt_callback.callback = io_interrupt_cb;\n            fmt->interrupt_callback.opaque = &io_interrupt;\n            fmt->probesize = 256 * 1024;\n            fmt->max_analyze_duration = 500000;\n            fmt->flags |= AVFMT_FLAG_FAST_SEEK;\n        }\n    }\n'''
+          if old not in s:
+              raise SystemExit('FFmpeg compatibility fallback block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
           PY
           touch build-src/Makefile build-src/icon.jpg build-src/nxanime_source/*
           find build-src -maxdepth 2 -type f -print
