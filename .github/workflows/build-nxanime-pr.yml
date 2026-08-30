@@ -35,7 +35,9 @@ jobs:
           source /opt/devkitpro/switchvars.sh
           cd build-src
           sed -i 's/pkg-config --cflags/aarch64-none-elf-pkg-config --cflags/g; s/pkg-config --libs/aarch64-none-elf-pkg-config --libs/g' Makefile
-          sed -i '/request.user_agent = "Mozilla\/5.0/a\    const bool online_video_smooth = request.referer.find("yichengwlkj.com") != std::string::npos || request.referer.find("rrmj.plus") != std::string::npos;' nxanime_source/player.cpp
+          if ! grep -q 'const bool online_video_smooth' nxanime_source/player.cpp; then
+            sed -i '/request.user_agent = "Mozilla\/5.0/a\    const bool online_video_smooth = request.referer.find("yichengwlkj.com") != std::string::npos || request.referer.find("rrmj.plus") != std::string::npos;' nxanime_source/player.cpp
+          fi
           grep -n 'online_video_smooth' nxanime_source/player.cpp | head
           aarch64-none-elf-pkg-config --cflags freetype2 libcurl libpng libwebp sdl2 libavformat libavcodec libavutil libswscale libswresample
           make clean || true
