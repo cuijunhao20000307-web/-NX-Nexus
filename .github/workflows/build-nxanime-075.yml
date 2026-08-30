@@ -6,7 +6,7 @@ on:
       - nxanime-build-075
     paths:
       - '.github/workflows/build-nxanime-075.yml'
-      - 'NXAnime-0.7.5-hotfix-current.tar.gz.b64'
+      - 'nxanime_chunks/**'
   workflow_dispatch:
 
 jobs:
@@ -18,12 +18,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore source bundle
+      - name: Restore source bundle from chunks
         shell: bash
         run: |
           set -euxo pipefail
+          cat nxanime_chunks/part*.txt | tr -d '\r\n' > /tmp/nxanime.b64
+          test "$(wc -c < /tmp/nxanime.b64)" -eq 128960
+          echo "fcaa7c06a3170f7df0efc6449b4cde1e797d9da4dfdf9354d3b98b6088229cb9  /tmp/nxanime.b64" | sha256sum -c -
+          base64 -d /tmp/nxanime.b64 > /tmp/nxanime.tar.gz
+          tar -tzf /tmp/nxanime.tar.gz
           mkdir -p build-src
-          base64 -d NXAnime-0.7.5-hotfix-current.tar.gz.b64 > /tmp/nxanime.tar.gz
           tar -xzf /tmp/nxanime.tar.gz -C build-src
           find build-src -maxdepth 2 -type f -print
 
