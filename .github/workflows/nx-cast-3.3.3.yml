@@ -45,6 +45,16 @@ jobs:
           grep -Eq '^APP_VERSION[[:space:]]*:?=[[:space:]]*3\.3\.3' nxcast-source/makefile
           rm -f nxcast-source/assets/fonts/switch_font.ttf
 
+      - name: Apply black-flash startup handoff fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "const fs=require('fs'),zlib=require('zlib'); const b64=fs.readFileSync('nxcast/boot-flash-fix.patch.br.b64','utf8').trim(); fs.writeFileSync('nxcast-boot.patch',zlib.brotliDecompressSync(Buffer.from(b64,'base64')))"
+          echo "c2a08a60cdfed95be06e500ef23b6e8ea72ed2b4ed2b5a6f52c6550a9d46e0c2  nxcast-boot.patch" | sha256sum -c -
+          git -C nxcast-source apply --check ../nxcast-boot.patch
+          git -C nxcast-source apply ../nxcast-boot.patch
+          grep -q "Immediately put one opaque white frame" nxcast-source/source/player/render/frontend.c
+
       - name: Run IPTV/UI regression tests
         shell: bash
         run: |
