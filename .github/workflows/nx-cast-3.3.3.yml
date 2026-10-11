@@ -55,6 +55,15 @@ jobs:
           git -C nxcast-source apply ../nxcast-boot.patch
           grep -q "Immediately put one opaque white frame" nxcast-source/source/player/render/frontend.c
 
+      - name: Initialize white-first-frame scissor size
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "const fs=require('fs'),zlib=require('zlib'); fs.writeFileSync('nxcast-size.patch',zlib.brotliDecompressSync(Buffer.from(fs.readFileSync('nxcast/boot-first-frame-size.patch.br.b64','utf8').trim(),'base64')))"
+          echo "61e5431950f2fff972c0e4e55f54e51321604275f9ca83c3fa5391da6752474c  nxcast-size.patch" | sha256sum -c -
+          git -C nxcast-source apply --check ../nxcast-size.patch
+          git -C nxcast-source apply ../nxcast-size.patch
+
       - name: Run IPTV/UI regression tests
         shell: bash
         run: |
