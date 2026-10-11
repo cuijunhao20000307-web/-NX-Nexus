@@ -1,0 +1,96 @@
+name: Build NX-Cast 3.3.3 NRO
+
+on:
+  push:
+    branches:
+      - build/nx-cast-3.3.3
+    paths:
+      - .github/workflows/nx-cast-3.3.3.yml
+      - nxcast/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nxcast-3.3.3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-nro:
+    name: NX-Cast 3.3.3 Switch NRO
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout isolated build branch
+        uses: actions/checkout@v4
+
+      - name: Retrieve verified original NX-Cast source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/Ode1l/NX-Cast.git nxcast-source
+          git -C nxcast-source fetch --depth=1 origin 0efdba4281122cdd97de0c3c1a7ebde7485d6d15
+          git -C nxcast-source checkout --detach 0efdba4281122cdd97de0c3c1a7ebde7485d6d15
+          test "$(git -C nxcast-source rev-parse HEAD)" = "0efdba4281122cdd97de0c3c1a7ebde7485d6d15"
+
+      - name: Restore 3.3.3 fix patch and validate checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "const fs=require('fs'),zlib=require('zlib');let b64=fs.readFileSync('nxcast/fixes-3.3.3.patch.br.b64','utf8').trim();fs.writeFileSync('nxcast333.patch',zlib.brotliDecompressSync(Buffer.from(b64,'base64')))"
+          echo "ff819fdd781c0818651153091f115f6661f771044107e41e639148764c70d044  nxcast333.patch" | sha256sum -c -
+          git -C nxcast-source apply --check ../nxcast333.patch
+          git -C nxcast-source apply ../nxcast333.patch
+          grep -Eq '^APP_VERSION[[:space:]]*:?=[[:space:]]*3\.3\.3' nxcast-source/makefile
+          rm -f nxcast-source/assets/fonts/switch_font.ttf
+
+      - name: Run IPTV/UI regression tests
+        shell: bash
+        run: |
+          cd nxcast-source
+          sh scripts/test_ui.sh
+
+      - name: Prepare Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Switch toolchain using original Dockerfile
+        uses: docker/build-push-action@v6
+        with:
+          context: nxcast-source
+          file: nxcast-source/Dockerfile
+          push: false
+          load: true
+          tags: nxcast-3.3.3-toolchain:local
+
+      - name: Build Switch NRO using devkitPro, libmpv and FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e DEVKITPRO=/opt/devkitpro \
+            -e NXCAST_MIN_NRO_SIZE=5000000 \
+            -v "$GITHUB_WORKSPACE/nxcast-source:/workspace" \
+            -w /workspace \
+            nxcast-3.3.3-toolchain:local \
+            bash -lc 'set -euo pipefail; /usr/local/bin/verify_switch_ffmpeg_airplay.sh /opt/devkitpro/portlibs/switch; host_pc="/usr/lib/$(gcc -print-multiarch)/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"; PKG_CONFIG_PATH="${host_pc}" make test-airplay; make RELEASE_JOBS=2 release-build'
+          test -s nxcast-source/NX-Cast.nro
+
+      - name: Package NRO and SD card bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd nxcast-source
+          NXCAST_MIN_NRO_SIZE=5000000 ./scripts/package_release.sh
+          mkdir -p ../nxcast-artifacts
+          cp NX-Cast.nro ../nxcast-artifacts/NX-Cast-3.3.3.nro
+          cp dist/NX-Cast-sdmc.zip ../nxcast-artifacts/NX-Cast-3.3.3-sdmc.zip
+          sha256sum ../nxcast-artifacts/*
+
+      - name: Upload downloadable NRO
+        uses: actions/upload-artifact@v4
+        with:
+          name: NX-Cast-3.3.3-NRO
+          path: nxcast-artifacts/
+          if-no-files-found: error
+          retention-days: 7
